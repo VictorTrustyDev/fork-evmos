@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	types2 "github.com/tendermint/tendermint/abci/types"
 	"math/big"
 	"time"
 
@@ -378,6 +379,8 @@ func (k Keeper) EstimateGas(c context.Context, req *types.EthCallRequest) (*type
 	return &types.EstimateGasResponse{Gas: hi}, nil
 }
 
+const defaultBlockMaxGas int64 = 40_000_000
+
 // TraceTx configures a new tracer according to the provided configuration, and
 // executes the given message in the provided environment. The return value will
 // be tracer dependent.
@@ -401,6 +404,19 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+
+	consParams := ctx.ConsensusParams()
+	if consParams == nil { // FIXME: awkward workaround
+		ctx = ctx.WithConsensusParams(&types2.ConsensusParams{
+			Block: &types2.BlockParams{
+				MaxGas: defaultBlockMaxGas,
+			},
+		})
+
+		consParams = ctx.ConsensusParams()
+	}
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(uint64(consParams.Block.MaxGas))) // FIXME: awkward workaround
+
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -409,6 +425,9 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to load evm config: %s", err.Error())
 	}
+
+	cfg.BaseFee = k.feeMarketKeeper.CalculateBaseFee(ctx) // using base fee of current context, not from previous context
+
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 
 	txConfig := statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash().Bytes()))
@@ -431,7 +450,7 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		}
 		txConfig.LogIndex += uint(len(rsp.Logs))
 	}
-	
+
 	k.ResetGasMeterAndConsumeGas(ctx, initialGas) // reset gas meter for each transaction
 
 	tx := req.Msg.AsTransaction()
@@ -485,6 +504,19 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+
+	consParams := ctx.ConsensusParams()
+	if consParams == nil { // FIXME: awkward workaround
+		ctx = ctx.WithConsensusParams(&types2.ConsensusParams{
+			Block: &types2.BlockParams{
+				MaxGas: defaultBlockMaxGas,
+			},
+		})
+
+		consParams = ctx.ConsensusParams()
+	}
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(uint64(consParams.Block.MaxGas))) // FIXME: awkward workaround
+
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -494,6 +526,9 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to load evm config")
 	}
+
+	cfg.BaseFee = k.feeMarketKeeper.CalculateBaseFee(ctx) // using base fee of current context, not from previous context
+
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 	txsLength := len(req.Txs)
 	results := make([]*types.TxTraceResult, 0, txsLength)
