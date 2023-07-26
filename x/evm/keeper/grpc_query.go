@@ -570,8 +570,13 @@ func (k *Keeper) traceTx(
 		timeout   = defaultTraceTimeout
 	)
 	msg, err := tx.AsMessage(signer, cfg.BaseFee)
+
 	if err != nil {
 		return nil, 0, status.Error(codes.Internal, err.Error())
+	}
+
+	if msg.GasPrice() != nil {
+		fmt.Println("#### Gas Price of the tracing tx:", msg.GasPrice().String())
 	}
 
 	if traceConfig == nil {
