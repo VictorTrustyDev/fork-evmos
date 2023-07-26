@@ -401,6 +401,7 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(40_000_000)) // FIXME: awkward workaround, need to pass from client, thus changes query trace request, result breaking change
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -431,7 +432,7 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		}
 		txConfig.LogIndex += uint(len(rsp.Logs))
 	}
-	
+
 	k.ResetGasMeterAndConsumeGas(ctx, initialGas) // reset gas meter for each transaction
 
 	tx := req.Msg.AsTransaction()
@@ -485,6 +486,7 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(40_000_000)) // FIXME: awkward workaround, need to pass from client, thus changes query trace request, result breaking change
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
