@@ -21,7 +21,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/common/math"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -171,11 +170,13 @@ func NewRPCTransaction(
 	} else {
 		signer = ethtypes.HomesteadSigner{}
 	}
-	from, _ := ethtypes.Sender(signer, tx) // #nosec G703
+
+	msg, _ := tx.AsMessage(signer, baseFee) // use the same conversion as runtime
+
 	v, r, s := tx.RawSignatureValues()
 	result := &RPCTransaction{
 		Type:     hexutil.Uint64(tx.Type()),
-		From:     from,
+		From:     msg.From(),
 		Gas:      hexutil.Uint64(tx.Gas()),
 		GasPrice: (*hexutil.Big)(tx.GasPrice()),
 		Hash:     tx.Hash(),
@@ -192,7 +193,13 @@ func NewRPCTransaction(
 		result.BlockHash = &blockHash
 		result.BlockNumber = (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
 		result.TransactionIndex = (*hexutil.Uint64)(&index)
+
+		// if the transaction has been mined, use the effective gas price from runtime message
+		result.GasPrice = (*hexutil.Big)(msg.GasPrice())
+	} else {
+		result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
 	}
+
 	switch tx.Type() {
 	case ethtypes.AccessListTxType:
 		al := tx.AccessList()
@@ -204,14 +211,6 @@ func NewRPCTransaction(
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
 		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
 		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
-		// if the transaction has been mined, compute the effective gas price
-		if baseFee != nil && blockHash != (common.Hash{}) {
-			// price = min(tip, gasFeeCap - baseFee) + baseFee
-			price := math.BigMin(new(big.Int).Add(tx.GasTipCap(), baseFee), tx.GasFeeCap())
-			result.GasPrice = (*hexutil.Big)(price)
-		} else {
-			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
-		}
 	}
 	return result, nil
 }
