@@ -50,6 +50,7 @@ type FeeMarketKeeper interface {
 	GetParams(ctx sdk.Context) feemarkettypes.Params
 	AddTransientGasWanted(ctx sdk.Context, gasWanted uint64) (uint64, error)
 	CalculateBaseFee(ctx sdk.Context) *big.Int
+	CalculateBaseFee2(ctx sdk.Context, debug bool) *big.Int
 }
 
 // Event Hooks

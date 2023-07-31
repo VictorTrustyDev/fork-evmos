@@ -691,7 +691,7 @@ func (k Keeper) tryInjectBaseFee(ctx sdk.Context, cfg *statedb.EVMConfig) {
 	}()
 	defer catchPanicPrintThenRethrow()
 
-	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
+	baseFee := k.feeMarketKeeper.CalculateBaseFee2(ctx, true) // compute and use base fee of current context, not from previous context
 	if baseFee != nil {
 		cfg.BaseFee = baseFee
 	}
