@@ -397,6 +397,8 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		contextHeight = 1
 	}
 
+	defer catchPanicPrintThenRethrow()
+
 	ctx := sdk.UnwrapSDKContext(c)
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
@@ -414,10 +416,7 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		return nil, status.Errorf(codes.Internal, "failed to load evm config: %s", err.Error())
 	}
 
-	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
-	if baseFee != nil {
-		cfg.BaseFee = baseFee
-	}
+	k.tryInjectBaseFee(ctx, cfg)
 
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 
@@ -490,6 +489,8 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 		contextHeight = 1
 	}
 
+	defer catchPanicPrintThenRethrow()
+
 	ctx := sdk.UnwrapSDKContext(c)
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
@@ -508,10 +509,7 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 		return nil, status.Error(codes.Internal, "failed to load evm config")
 	}
 
-	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
-	if baseFee != nil {
-		cfg.BaseFee = baseFee
-	}
+	k.tryInjectBaseFee(ctx, cfg)
 
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 	txsLength := len(req.Txs)
@@ -675,4 +673,26 @@ func injectConsensusParamsForTracingContext(ctx sdk.Context) sdk.Context {
 	}
 
 	return ctx
+}
+
+func catchPanicPrintThenRethrow() {
+	if err := recover(); err != nil {
+		fmt.Println("caught panic")
+		fmt.Println(err)
+		panic(err)
+	}
+}
+
+func (k Keeper) tryInjectBaseFee(ctx sdk.Context, cfg *statedb.EVMConfig) {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("silenced inject base fee")
+		}
+	}()
+	defer catchPanicPrintThenRethrow()
+
+	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
+	if baseFee != nil {
+		cfg.BaseFee = baseFee
+	}
 }
