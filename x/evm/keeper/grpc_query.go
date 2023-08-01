@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	abci "github.com/tendermint/tendermint/abci/types"
 	"math/big"
 	"time"
 
@@ -401,6 +402,10 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+	ctx = injectConsensusParamsForTracingContext(ctx)
+	consParams := ctx.ConsensusParams()
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(uint64(consParams.Block.MaxGas)))
+
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -409,10 +414,21 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to load evm config: %s", err.Error())
 	}
+
+	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
+	if baseFee != nil {
+		cfg.BaseFee = baseFee
+	}
+
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 
 	txConfig := statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash().Bytes()))
+
+	initialGas := ctx.GasMeter().GasConsumed() // store initial gas and reset per transaction
+
 	for i, tx := range req.Predecessors {
+		k.ResetGasMeterAndConsumeGas(ctx, initialGas) // reset gas meter for each transaction
+
 		ethTx := tx.AsTransaction()
 		msg, err := ethTx.AsMessage(signer, cfg.BaseFee)
 		if err != nil {
@@ -426,6 +442,8 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		}
 		txConfig.LogIndex += uint(len(rsp.Logs))
 	}
+
+	k.ResetGasMeterAndConsumeGas(ctx, initialGas) // reset gas meter for each transaction
 
 	tx := req.Msg.AsTransaction()
 	txConfig.TxHash = tx.Hash()
@@ -478,6 +496,10 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 	ctx = ctx.WithBlockHeight(contextHeight)
 	ctx = ctx.WithBlockTime(req.BlockTime)
 	ctx = ctx.WithHeaderHash(common.Hex2Bytes(req.BlockHash))
+	ctx = injectConsensusParamsForTracingContext(ctx)
+	consParams := ctx.ConsensusParams()
+	ctx = ctx.WithBlockGasMeter(sdk.NewGasMeter(uint64(consParams.Block.MaxGas)))
+
 	chainID, err := getChainID(ctx, req.ChainId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -487,16 +509,28 @@ func (k Keeper) TraceBlock(c context.Context, req *types.QueryTraceBlockRequest)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to load evm config")
 	}
+
+	baseFee := k.feeMarketKeeper.CalculateBaseFee(ctx) // compute and use base fee of current context, not from previous context
+	if baseFee != nil {
+		cfg.BaseFee = baseFee
+	}
+
 	signer := ethtypes.MakeSigner(cfg.ChainConfig, big.NewInt(ctx.BlockHeight()))
 	txsLength := len(req.Txs)
 	results := make([]*types.TxTraceResult, 0, txsLength)
 
 	txConfig := statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash().Bytes()))
+
+	initialGas := ctx.GasMeter().GasConsumed() // store initial gas and reset per transaction
+
 	for i, tx := range req.Txs {
+		k.ResetGasMeterAndConsumeGas(ctx, initialGas) // reset gas meter for each transaction
+
 		result := types.TxTraceResult{}
 		ethTx := tx.AsTransaction()
 		txConfig.TxHash = ethTx.Hash()
 		txConfig.TxIndex = uint(i)
+
 		traceResult, logIndex, err := k.traceTx(ctx, cfg, txConfig, signer, ethTx, req.TraceConfig, true, nil)
 		if err != nil {
 			result.Error = err.Error()
@@ -627,4 +661,20 @@ func getChainID(ctx sdk.Context, chainID int64) (*big.Int, error) {
 		return evmostypes.ParseChainID(ctx.ChainID())
 	}
 	return big.NewInt(chainID), nil
+}
+
+const defaultBlockMaxGas int64 = 40_000_000
+
+// injectConsensusParamsForTracingContext add a fake consensus state, which is not available at tracing context, to be used to get block gas limit and compute base fee of the tracing context block
+func injectConsensusParamsForTracingContext(ctx sdk.Context) sdk.Context {
+	consParams := ctx.ConsensusParams()
+	if consParams == nil { // FIXME: awkward workaround
+		ctx = ctx.WithConsensusParams(&abci.ConsensusParams{
+			Block: &abci.BlockParams{
+				MaxGas: defaultBlockMaxGas,
+			},
+		})
+	}
+
+	return ctx
 }
